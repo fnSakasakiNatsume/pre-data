@@ -20,16 +20,35 @@ def wait_for_page_load(driver, max_wait_time=60):
     
     while time.time() - start_time < max_wait_time:
         try:
-            # 检查是否还有loading元素
-            loading_elements = driver.find_elements(By.ID, "preload")
+            # 检查多种loading元素
+            loading_selectors = [
+                "#preload", 
+                ".loading", 
+                ".spinner", 
+                ".loader",
+                "[class*='loading']",
+                "[id*='loading']",
+                "[class*='spinner']",
+                "[class*='loader']"
+            ]
             
-            if len(loading_elements) == 0:
-                print("✅ Loading元素已消失，页面加载完成！")
-                return True
+            loading_elements = []
+            for selector in loading_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    loading_elements.extend(elements)
+                except:
+                    continue
+            
+            # 检查页面是否还在加载
+            page_state = driver.execute_script("return document.readyState")
             
             # 获取当前页面文本
             body_text = driver.find_element(By.TAG_NAME, "body").text
             current_text_length = len(body_text)
+            
+            # 检查是否有loading文本
+            has_loading_text = any(keyword in body_text.lower() for keyword in ['loading', '请稍候', '加载中', '正在加载'])
             
             # 检查内容是否稳定
             if current_text_length == last_text_length and current_text_length > 100:
@@ -42,17 +61,22 @@ def wait_for_page_load(driver, max_wait_time=60):
             
             last_text_length = current_text_length
             
+            # 检查页面状态和loading元素
+            if page_state == "complete" and len(loading_elements) == 0 and not has_loading_text:
+                print("✅ 页面状态为complete且无loading元素，加载完成！")
+                return True
+            
             # 检查是否有实际内容（不仅仅是loading文本）
-            if current_text_length > 500 and "loading" not in body_text.lower():
+            if current_text_length > 500 and not has_loading_text and page_state == "complete":
                 print(f"✅ 检测到丰富内容 ({current_text_length} 字符)，加载完成！")
                 return True
             
-            print(f"⏳ 仍在加载中... (已等待 {int(time.time() - start_time)}秒, 文本长度: {current_text_length})")
-            time.sleep(5)  # 增加等待间隔
+            print(f"⏳ 仍在加载中... (已等待 {int(time.time() - start_time)}秒, 文本长度: {current_text_length}, 页面状态: {page_state}, loading元素: {len(loading_elements)})")
+            time.sleep(3)  # 减少等待间隔，更频繁检查
             
         except Exception as e:
             print(f"等待过程中出现错误: {e}")
-            time.sleep(3)
+            time.sleep(2)
     
     print(f"⚠️ 等待超时 ({max_wait_time}秒)，保存当前内容")
     return False
@@ -79,8 +103,8 @@ def crawl_and_save_html(driver, domain, output_dir, max_wait_time=60):
         
         # 检测错误页面关键词
         error_keywords = [
-            'godaddy', 'domain', 'parked', 'for sale', 'buy this domain',
-            'domain name', 'purchase', 'not found', '404', 'error',
+            'godaddy', 'buy this domain',
+            '404', 'error',
         ]
         
         is_error_page = any(keyword in title or keyword in body_text for keyword in error_keywords)
@@ -91,11 +115,6 @@ def crawl_and_save_html(driver, domain, output_dir, max_wait_time=60):
         
         # 等待页面完全加载
         is_fully_loaded = wait_for_page_load(driver, max_wait_time)
-        
-        # 额外等待确保内容完全渲染
-        if is_fully_loaded:
-            print("额外等待5秒确保内容完全渲染...")
-            time.sleep(5)
         
         # 获取页面信息
         title = driver.title
@@ -115,82 +134,80 @@ def crawl_and_save_html(driver, domain, output_dir, max_wait_time=60):
         screenshot_filename = os.path.join(output_dir, f"{domain}.png")
         screenshot_saved = False
         
-        try:
-            print("准备截图...")
-            
-            # 获取页面实际尺寸
+        # 只有在页面完全加载后才截图
+        if is_fully_loaded:
             try:
-                # 获取页面实际宽度和高度
-                page_width = driver.execute_script("return document.documentElement.scrollWidth")
-                page_height = driver.execute_script("return document.documentElement.scrollHeight")
+                print("页面已完全加载，准备截图...")
                 
-                print(f"页面实际尺寸: {page_width}x{page_height}px")
+                # 额外等待确保内容完全渲染
+                print("额外等待3秒确保内容完全渲染...")
+                time.sleep(3)
                 
-                # 计算合适的窗口大小，保持真实比例
-                max_width = 1920
-                max_height = 1080
-                
-                # 如果页面尺寸过大，按比例缩放
-                if page_width > max_width or page_height > max_height:
-                    scale = min(max_width / page_width, max_height / page_height)
-                    window_width = int(page_width * scale)
-                    window_height = int(page_height * scale)
-                else:
-                    window_width = page_width
-                    window_height = page_height
-                
-                # 确保最小尺寸
-                window_width = max(window_width, 1200)
-                window_height = max(window_height, 800)
-                
-                print(f"设置窗口大小: {window_width}x{window_height}px")
-                
-                # 设置窗口大小
-                driver.set_window_size(window_width, window_height)
-                time.sleep(2)
-                
-                # 截图
-                driver.save_screenshot(screenshot_filename)
-                print(f"📸 截图已保存 (真实比例): {screenshot_filename}")
-                screenshot_saved = True
-                
-            except Exception as e1:
-                print(f"方法1失败: {e1}")
-                
-                # 备用方法：使用固定比例
+                # 获取页面实际尺寸
                 try:
-                    # 使用16:9比例
-                    driver.set_window_size(1920, 1080)
+                    # 获取页面实际宽度和高度
+                    page_width = driver.execute_script("return document.documentElement.scrollWidth")
+                    page_height = driver.execute_script("return document.documentElement.scrollHeight")
+                    
+                    print(f"页面实际尺寸: {page_width}x{page_height}px")
+                    
+                    # 计算合适的窗口大小，保持真实比例
+                    max_width = 1920
+                    max_height = 1080
+                    
+                    # 如果页面尺寸过大，按比例缩放
+                    if page_width > max_width or page_height > max_height:
+                        scale = min(max_width / page_width, max_height / page_height)
+                        window_width = int(page_width * scale)
+                        window_height = int(page_height * scale)
+                    else:
+                        window_width = page_width
+                        window_height = page_height
+                    
+                    # 确保最小尺寸
+                    window_width = max(window_width, 1200)
+                    window_height = max(window_height, 800)
+                    
+                    print(f"设置窗口大小: {window_width}x{window_height}px")
+                    
+                    # 设置窗口大小
+                    driver.set_window_size(window_width, window_height)
                     time.sleep(2)
-                    driver.save_screenshot(screenshot_filename)
-                    print(f"📸 截图已保存 (16:9比例): {screenshot_filename}")
-                    screenshot_saved = True
                     
-                except Exception as e2:
-                    print(f"方法2也失败: {e2}")
+                    # 再次检查页面状态
+                    page_state = driver.execute_script("return document.readyState")
+                    if page_state == "complete":
+                        # 截图
+                        driver.save_screenshot(screenshot_filename)
+                        print(f"📸 截图已保存 (真实比例): {screenshot_filename}")
+                        screenshot_saved = True
+                    else:
+                        print(f"⚠️ 页面状态不是complete ({page_state})，跳过截图")
+                        screenshot_saved = False
+                        
+                except Exception as e1:
+                    print(f"真实比例截图失败: {e1}")
                     
-                    # 方法3：滚动截图
+                    # 备用方法：使用固定比例
                     try:
+                        # 使用16:9比例
                         driver.set_window_size(1920, 1080)
                         time.sleep(2)
-                        
-                        # 滚动到页面底部确保内容加载
-                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                        time.sleep(2)
-                        driver.execute_script("window.scrollTo(0, 0);")
-                        time.sleep(1)
-                        
                         driver.save_screenshot(screenshot_filename)
-                        print(f"📸 截图已保存 (滚动后): {screenshot_filename}")
+                        print(f"📸 截图已保存 (16:9比例): {screenshot_filename}")
                         screenshot_saved = True
                         
-                    except Exception as e3:
-                        print(f"所有截图方法都失败: {e3}")
+                    except Exception as e2:
+                        print(f"备用截图方法也失败: {e2}")
                         screenshot_saved = False
                         screenshot_filename = None
                         
-        except Exception as screenshot_error:
-            print(f"⚠️ 截图失败: {screenshot_error}")
+            except Exception as screenshot_error:
+                print(f"⚠️ 截图失败: {screenshot_error}")
+                screenshot_saved = False
+                screenshot_filename = None
+        else:
+            print("⚠️ 页面未完全加载，跳过截图")
             screenshot_saved = False
             screenshot_filename = None
         
@@ -222,7 +239,7 @@ def crawl_and_save_html(driver, domain, output_dir, max_wait_time=60):
         print(f"爬取失败 {domain}: {e}")
         return None
 
-def batch_crawl_from_domains(domains, output_dir="C:/ml/results-combined-2", max_wait_time=60):
+def batch_crawl_from_domains(domains, output_dir="C:/ml/results-combined-3", max_wait_time=60):
     """批量爬取网站列表"""
     print(f"开始批量爬取 {len(domains)} 个网站...")
     print(f"输出目录: {output_dir}")
@@ -307,7 +324,7 @@ def batch_crawl_from_domains(domains, output_dir="C:/ml/results-combined-2", max
         print(f"批量爬取失败: {e}")
         return None
 
-def load_domains_from_file(filename="accessible_domains.json"):
+def load_domains_from_file(filename="domains_list.json"):
     """从文件加载域名列表"""
     try:
         with open(filename, 'r', encoding='utf-8') as f:
