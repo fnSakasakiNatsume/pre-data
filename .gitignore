@@ -51,6 +51,14 @@ Thumbs.db
 !requirements.txt
 !README.md
 !LICENSE
+!domains_list.json
+!accessible_domains.json
+!accessible_combined.json
+# 排除大文件
+domains.json
+all.json
+combined.json
+address.json
 
 # Logs
 *.log
